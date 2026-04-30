@@ -30,7 +30,6 @@ class ModelRequestData(NamedTuple):
     stop_token_ids: Optional[list[int]] = None
 
 
-# Currently Qwen2.5-VL is the only supported multi-modal
 # Qwen2.5-VL
 def run_qwen2_5_vl(questions: list[str], modality: str,
                    args) -> ModelRequestData:
@@ -68,9 +67,59 @@ def run_qwen2_5_vl(questions: list[str], modality: str,
     )
 
 
+# Qwen3-VL (PR #1522 dense path; same chat template as Qwen2.5-VL).
+def run_qwen3_vl(questions: list[str], modality: str,
+                 args) -> ModelRequestData:
+    engine_args = EngineArgs(
+        model=args.model,
+        max_model_len=args.max_model_len,
+        tensor_parallel_size=args.tensor_parallel_size,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_num_seqs=1,
+        mm_processor_kwargs={
+            "size": {
+                "longest_edge": 1003520,
+                "shortest_edge": 3136
+            },
+            "fps": 1,
+        },
+        limit_mm_per_prompt={modality: 1},
+        additional_config={
+            "vision_warmup_config": {
+                "image_shapes": [[448, 448]],
+            },
+        },
+    )
+
+    if modality == "image":
+        placeholder = "<|image_pad|>"
+    elif modality == "video":
+        placeholder = "<|video_pad|>"
+
+    prompts = [
+        ("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+         f"<|im_start|>user\n<|vision_start|>{placeholder}<|vision_end|>"
+         f"{question}<|im_end|>\n"
+         "<|im_start|>assistant\n") for question in questions
+    ]
+
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompts=prompts,
+    )
+
+
 model_example_map = {
     "qwen2_5_vl": run_qwen2_5_vl,
+    "qwen3_vl": run_qwen3_vl,
 }
+
+
+def _model_kind_for_path(model: str) -> str:
+    name = model.lower().rstrip("/").rsplit("/", 1)[-1]
+    if "qwen3" in name and "vl" in name:
+        return "qwen3_vl"
+    return "qwen2_5_vl"
 
 
 def get_multi_modal_input(args):
@@ -219,8 +268,9 @@ def main(args):
     data = mm_input["data"]
     questions = mm_input["questions"]
 
-    # NOTE: Currently, only Qwen2.5-VL is supported. If later we want to support a model with new chat template, we may need to change this
-    req_data = model_example_map["qwen2_5_vl"](questions, modality, args)
+    # Pick the right wiring (Qwen2.5-VL vs Qwen3-VL) from the model path.
+    req_data = model_example_map[_model_kind_for_path(args.model)](
+        questions, modality, args)
 
     # Disable other modalities to save memory
     # Initial all modalities to be 0s and add the specifc modality limit later accordingly
