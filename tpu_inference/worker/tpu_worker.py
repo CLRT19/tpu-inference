@@ -295,10 +295,20 @@ class TPUWorker(WorkerBase):
             is_last_rank = self.rank == self.pp_config.pp_world_size - 1
         else:
             # topology_order_id is used to determine the KV cache
-            # mapping between P/D workers
+            # mapping between P/D workers. JAX 0.9.2 on v5p does not expose
+            # `.coords` on TpuDevice for some PjRT plugin versions; in that
+            # case fall back to self.rank since we are not running P/D.
             if multihost_backend == "ray":
-                self.topology_order_id = get_device_topology_order_id(
-                    jax.local_devices(), jax.devices())
+                try:
+                    self.topology_order_id = get_device_topology_order_id(
+                        jax.local_devices(), jax.devices())
+                except AttributeError as e:
+                    logger.warning(
+                        "get_device_topology_order_id failed (%s); "
+                        "falling back to self.rank=%d. P/D KV cache mapping "
+                        "may be wrong, but pure TP/PP unaffected.",
+                        e, self.rank)
+                    self.topology_order_id = self.rank
 
         self.model_runner = TPUModelRunner(self.vllm_config, self.devices,
                                            self.rank, is_first_rank,
