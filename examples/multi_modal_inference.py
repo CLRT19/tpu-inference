@@ -282,9 +282,10 @@ def main(args):
     if args.seed is not None:
         engine_args["seed"] = args.seed
 
-    if engine_args.get("compilation_config") is None:
-        engine_args["compilation_config"] = {}
-    engine_args["compilation_config"]["cudagraph_capture_sizes"] = []
+    # Do not set compilation_config from a partial dict — vllm 0.19.1rc1 fails
+    # CompilationConfig validation when only some fields are present (e.g.
+    # pass_config.fuse_minimax_qk_norm becomes None). Cudagraph isn't used on
+    # TPU anyway. Set it through the field-tree only if explicitly requested.
 
     llm = LLM(**engine_args)
 
