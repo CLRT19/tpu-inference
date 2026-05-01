@@ -282,10 +282,12 @@ def main(args):
     if args.seed is not None:
         engine_args["seed"] = args.seed
 
-    # Do not set compilation_config from a partial dict — vllm 0.19.1rc1 fails
-    # CompilationConfig validation when only some fields are present (e.g.
-    # pass_config.fuse_minimax_qk_norm becomes None). Cudagraph isn't used on
-    # TPU anyway. Set it through the field-tree only if explicitly requested.
+    # asdict(EngineArgs) on vllm 0.19.1rc1 produces a compilation_config dict
+    # whose nested fields are None (e.g. cudagraph_capture_sizes,
+    # pass_config.fuse_minimax_qk_norm). LLM(**...) then fails Pydantic
+    # validation when reconstructing CompilationConfig. Pop it so vLLM
+    # constructs the default CompilationConfig itself.
+    engine_args.pop("compilation_config", None)
 
     llm = LLM(**engine_args)
 
