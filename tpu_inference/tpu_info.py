@@ -72,7 +72,12 @@ def get_node_worker_id() -> int:
 
 def get_num_cores_per_chip() -> int:
     tpu_type = get_tpu_type()
-    if tpu_type.startswith(("v5litepod", "v6e")):
+    # In modern JAX (>= 0.4.x with megacore), v5p / v4 expose one device per
+    # chip (megacore mode), so chip == device for the chips-per-stage math.
+    # Returning 2 for v5p caused TPU_CHIPS_PER_PROCESS_BOUNDS to under-allocate
+    # by 2x, so jax.devices() inside a Ray actor only saw 1 device for TP=4
+    # and the mesh reshape failed.
+    if tpu_type.startswith(("v5litepod", "v5p", "v6e")):
         return 1
     return 2
 
