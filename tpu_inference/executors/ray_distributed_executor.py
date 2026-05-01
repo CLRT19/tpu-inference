@@ -260,12 +260,34 @@ class RayDistributedExecutor(RayDistributedExecutorV1):
         driver_ip = get_ip()
         num_tpu_per_worker = placement_group.bundle_specs[0].get(
             current_platform.ray_device_key, 0)
+        # Ray's TPU plugin (ray/_private/accelerators/tpu.py:426-434)
+        # early-returns on a full-host {TPU: N} allocation and never sets
+        # TPU_VISIBLE_CHIPS, so libtpu defaults to chip 0 only and each
+        # actor's jax.devices() returns 1. Inject the right TPU env vars
+        # via runtime_env so they land *before* the actor's module-level
+        # `import jax` (the env-var write inside init_device() is too late
+        # because libtpu has already captured its env at first JAX import).
+        actor_tpu_env = {
+            "TPU_PROCESS_BOUNDS": "1,1,1",
+            "TPU_CHIPS_PER_PROCESS_BOUNDS": f"1,{int(num_tpu_per_worker)},1",
+            "TPU_VISIBLE_CHIPS": ",".join(
+                str(i) for i in range(int(num_tpu_per_worker))),
+            "CLOUD_TPU_TASK_ID": "0",
+        }
         for rank, bundle_id in enumerate(bundle_indices):
             scheduling_strategy = PlacementGroupSchedulingStrategy(
                 placement_group=placement_group,
                 placement_group_capture_child_tasks=True,
                 placement_group_bundle_index=bundle_id,
             )
+            actor_remote_kwargs = dict(ray_remote_kwargs)
+            actor_runtime_env = dict(
+                actor_remote_kwargs.get("runtime_env") or {})
+            actor_runtime_env_vars = dict(
+                actor_runtime_env.get("env_vars") or {})
+            actor_runtime_env_vars.update(actor_tpu_env)
+            actor_runtime_env["env_vars"] = actor_runtime_env_vars
+            actor_remote_kwargs["runtime_env"] = actor_runtime_env
             worker = ray.remote(
                 num_cpus=0,
                 num_gpus=0,
@@ -273,7 +295,7 @@ class RayDistributedExecutor(RayDistributedExecutorV1):
                     current_platform.ray_device_key: num_tpu_per_worker
                 },
                 scheduling_strategy=scheduling_strategy,
-                **ray_remote_kwargs,
+                **actor_remote_kwargs,
             )(RayWorkerWrapper).remote(rpc_rank=rank)
             worker_metadata.append(
                 RayWorkerMetaData(worker=worker, created_rank=rank))
