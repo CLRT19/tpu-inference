@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from jax.sharding import Mesh
+from torchax.ops.mappings import t2j_dtype
 from vllm.config import VllmConfig
 
 from tpu_inference import utils
@@ -1690,7 +1691,7 @@ class Qwen3VLForConditionalGeneration(nnx.Module):
 
             dummy_pixel_values = jnp.ones(
                 (num_patches, patch_input_dim),
-                self.vllm_config.model_config.dtype,
+                t2j_dtype(self.vllm_config.model_config.dtype),
             )
             dummy_grid_thw = (grid_thw,)
 
