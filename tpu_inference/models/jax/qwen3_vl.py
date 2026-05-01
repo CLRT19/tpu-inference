@@ -1433,7 +1433,8 @@ class Qwen3VLForConditionalGeneration(nnx.Module):
         else:
             embed_shape = (*input_ids.shape, self.config.hidden_size)
             inputs_embeds = jnp.zeros(
-                embed_shape, dtype=self.vllm_config.model_config.dtype)
+                embed_shape,
+                dtype=t2j_dtype(self.vllm_config.model_config.dtype))
 
         if multimodal_embeddings is not None and multimodal_embeddings.shape[0] != 0:
             if is_multimodal is not None:
