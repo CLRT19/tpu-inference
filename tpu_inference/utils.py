@@ -248,8 +248,12 @@ def make_optimized_mesh(axis_shapes: Sequence[int],
                         devices: Sequence[xc.Device] | None = None):
     if devices is None:
         devices = xb.devices()
-    # Sort the devices in case it's passed in an arbitary order
-    devices = sorted(devices, key=lambda x: x.coords)
+    # Sort the devices in case it's passed in an arbitary order. JAX 0.9.2 on
+    # v5p exposes bare jaxlib._jax.Device objects without `.coords`; skip the
+    # sort in that case (device order from xb.devices() is already topology-
+    # sane on a single-slice).
+    if all(hasattr(d, "coords") for d in devices):
+        devices = sorted(devices, key=lambda x: x.coords)
 
     def _is_1D(axis_shapes):
         return sum(x > 1 for x in axis_shapes) == 1
