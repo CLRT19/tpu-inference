@@ -70,10 +70,15 @@ class TPUSupportedSamplingMetadata:
                                              cache_collision_dummy,
                                              sharding=None)
 
-        if input_batch.all_greedy:
-            return cls(do_sampling=False,
-                       logprobs=needs_logprobs,
-                       _cache_collision_dummy=cache_collision_dummy)
+        # NOTE: do NOT special-case all-greedy with do_sampling=False. That makes
+        # `do_sampling` (a jit-static meta field) flip between batches, which
+        # recompiles a brand-new `jit_sample` Pallas-kernel variant every time
+        # the batch switches greedy<->mixed. On v5p that retrace storm
+        # eventually compiles a kernel variant that triggers a TPU
+        # RuntimeUnexpectedCoreHalt (E0200) ~15 min in, killing the whole slice.
+        # Pin do_sampling=True always: greedy requests carry temperature=-1.0 and
+        # sample() already selects argmax when temperature < eps, so correctness
+        # is preserved while jit_sample compiles exactly once.
         num_reqs = input_batch.num_reqs
 
         def fill_slice(cpu_torch_tensor: torch.Tensor,
@@ -101,6 +106,6 @@ class TPUSupportedSamplingMetadata:
                                top_k_tensor[:padded_num_reqs],
                                sharding=sharding),
             _cache_collision_dummy=cache_collision_dummy,
-            do_sampling=not input_batch.all_greedy,
+            do_sampling=True,  # pinned — see note above (greedy => temp=-1 argmax)
             logprobs=needs_logprobs,
         )
