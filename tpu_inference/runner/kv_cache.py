@@ -129,16 +129,29 @@ def create_kv_caches(
             PartitionSpec(ShardingAxisName.ATTN_DATA, None,
                           ShardingAxisName.ATTN_HEAD))
 
-    def _allocate() -> jax.Array:
-        return jnp.empty(
-            shape=cache_shape,
-            dtype=cache_dtype,
-        )
+    def _allocate(index) -> np.ndarray:
+        """Build one addressable shard without dispatching a TPU executable.
 
-    sharded_allocate = jax.jit(_allocate, out_shardings=sharding)
+        KV-cache contents are intentionally uninitialized and are overwritten
+        before use.  Allocating them through ``jax.jit(jnp.empty)`` dispatches
+        one PJRT executable per layer.  In an already initialized multi-host
+        JAX runtime that executable can block indefinitely in libtpu on hosts
+        whose local devices begin at process index 4 or later, even though the
+        cache mesh contains only that host's devices.  Constructing the global
+        array from its addressable host shards uses buffer transfers instead
+        and avoids that unrelated executable/collective path.
+        """
+        shard_shape = tuple(
+            len(range(*axis.indices(axis_size)))
+            for axis, axis_size in zip(index, cache_shape)
+        )
+        return np.empty(shard_shape, dtype=np.dtype(cache_dtype))
+
     kv_caches = []
     for _ in layer_names:
-        kv_caches.append(sharded_allocate())
+        kv_caches.append(
+            jax.make_array_from_callback(cache_shape, sharding, _allocate)
+        )
     return kv_caches
 
 

@@ -116,19 +116,29 @@ def general_device_put(tensor: jax.Array,
     """
 
     def _put(t):
-        multihost_backend = envs.TPU_MULTIHOST_BACKEND
-        # If we are not in multi-host setup, or the tensor is not fully addressable,
-        # we can use jax.device_put directly.
-        if multihost_backend != "ray" or (isinstance(t, jax.Array)
-                                          and not t.is_fully_addressable):
+        source_is_global = (
+            isinstance(t, jax.Array) and not t.is_fully_addressable
+        )
+        target_is_global = (
+            envs.TPU_MULTIHOST_BACKEND == "ray"
+            or (
+                hasattr(sharding, "is_fully_addressable")
+                and not sharding.is_fully_addressable
+            )
+        )
+        # Existing global arrays can be resharded directly. Local targets also
+        # accept normal device_put. A local/NumPy value targeting a native JAX
+        # multi-controller mesh must instead be constructed shard-by-shard;
+        # device_put rejects non-addressable target devices.
+        if source_is_global or not target_is_global:
             if layout is not None:
                 return jax.device_put(t, Format(layout, sharding))
             else:
                 return jax.device_put(t, sharding)
 
-        # NOTE: at here, num_global_devices != num_local_devices
-        # meaning we are in multi-host setup. Each host will run the same process
-        # and each process only need to handle the devices accessible to this host.
+        # At this point the target spans multiple controllers while the source
+        # is fully present on this host. Each process supplies only the slices
+        # for its addressable target devices.
         ctx = nullcontext() if source_mesh is None else jax.set_mesh(
             source_mesh)
         # `t[i]` needs to be operated in the same mesh as `t`, which is provided as

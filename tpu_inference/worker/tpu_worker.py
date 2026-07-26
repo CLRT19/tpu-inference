@@ -231,18 +231,29 @@ class TPUWorker(WorkerBase):
             device_indexes = sharding_config.device_indexes
             if device_indexes is not None and len(device_indexes) > 0:
                 # Enforcing the devices sequence to be consistent with the specified device indexes
-                all_local_devices = jax.local_devices()
+                # Multi-host GRPO gives every controller the same global TPU
+                # mesh. Resolve those IDs against jax.devices(); the local
+                # list contains only four IDs and fails at the next host.
+                use_global_mesh = os.environ.get(
+                    "QWEN3VL_VLLM_GLOBAL_MESH", "").lower() in (
+                        "1", "true", "yes", "on")
+                available_devices = (
+                    jax.devices()
+                    if use_global_mesh
+                    else jax.local_devices()
+                )
                 device_dict = {
                     device.id: device
-                    for device in all_local_devices
+                    for device in available_devices
                 }
                 self.devices = []
                 for device_index in device_indexes:
-                    device = device_dict[device_index]
+                    device = device_dict.get(device_index)
                     if device is None:
                         raise KeyError(
                             f"Device index {device_index} not found in "
-                            f"jax.local_devices() with IDs {list(device_dict.keys())}!"
+                            f"{'jax.devices()' if use_global_mesh else 'jax.local_devices()'} "
+                            f"with IDs {list(device_dict.keys())}!"
                         )
                     self.devices.append(device)
                 assert len(self.devices) >= sharding_config.total_devices

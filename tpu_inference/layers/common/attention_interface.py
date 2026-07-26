@@ -65,16 +65,18 @@ def sharded_flash_attention(
     sm_scale: Optional[float] = None,
     vmem_limit_bytes: int | None = None,
     use_attention_bias: bool = False,
+    shard_batch: bool = True,
 ) -> Callable[..., Any]:
+    batch_axis = "data" if shard_batch else None
     if use_attention_bias:
         in_specs = (
-            P("data", "model", None, None),  # q
-            P("data", "model", None, None),  # k
-            P("data", "model", None, None),  # v
-            P("data", "model", None, None),  # attention_bias
+            P(batch_axis, "model", None, None),  # q
+            P(batch_axis, "model", None, None),  # k
+            P(batch_axis, "model", None, None),  # v
+            P(batch_axis, "model", None, None),  # attention_bias
             P(),  # segment_ids
         )
-        out_specs = P("data", "model", None, None)
+        out_specs = P(batch_axis, "model", None, None)
 
         def _flash_attention_use_ab(q, k, v, attention_bias, segment_ids):
             return flash_attention(q,
@@ -89,12 +91,12 @@ def sharded_flash_attention(
         attn_fn = _flash_attention_use_ab
     else:
         in_specs = (
-            P("data", "model", None, None),  # q
-            P("data", "model", None, None),  # k
-            P("data", "model", None, None),  # v
+            P(batch_axis, "model", None, None),  # q
+            P(batch_axis, "model", None, None),  # k
+            P(batch_axis, "model", None, None),  # v
             P(),  # segment_ids
         )
-        out_specs = P("data", "model", None, None)
+        out_specs = P(batch_axis, "model", None, None)
 
         def _flash_attention(q, k, v, segment_ids):
             return flash_attention(q,

@@ -64,6 +64,29 @@ def test_hbm_usage_bytes_pathways_disabled():
     assert usage == expected_usage
 
 
+@patch("vllm.envs.VLLM_TPU_USING_PATHWAYS", False)
+@patch("jax.process_index", return_value=1)
+@patch.dict(os.environ, {"QWEN3VL_VLLM_GLOBAL_MESH": "1"})
+def test_hbm_usage_bytes_global_mesh_uses_addressable_devices(
+        mock_process_index):
+    del mock_process_index
+    local = MagicMock()
+    local.process_index = 1
+    local.memory_stats.return_value = {
+        "bytes_in_use": 50 * GBYTES,
+        "bytes_limit": 128 * GBYTES,
+    }
+    remote = MagicMock()
+    remote.process_index = 0
+    remote.memory_stats.side_effect = AssertionError(
+        "remote MemoryStats must not be called"
+    )
+
+    assert hbm_usage_bytes([remote, local]) == [
+        (50 * GBYTES, 128 * GBYTES)
+    ]
+
+
 @patch("vllm.envs.VLLM_TPU_USING_PATHWAYS", True)
 @patch("jax.live_arrays")
 @patch("jax.devices")

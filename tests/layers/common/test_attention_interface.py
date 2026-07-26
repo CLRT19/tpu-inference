@@ -21,7 +21,8 @@ import pytest
 from jax.sharding import Mesh
 
 from tpu_inference.layers.common.attention_interface import (
-    attention, mla_attention, sharded_ragged_paged_attention)
+    attention, mla_attention, sharded_flash_attention,
+    sharded_ragged_paged_attention)
 from tpu_inference.layers.common.attention_metadata import AttentionMetadata
 from tpu_inference.layers.common.sharding import ShardingAxisName
 from tpu_inference.runner.kv_cache import get_kv_cache_shape_with_mesh
@@ -156,6 +157,33 @@ def test_attention_sink_no_64_raises_error(monkeypatch, mesh):
             match="Attention sink support is only available when head_dim==64"
     ):
         _test_attention(monkeypatch, mesh, 128, True)
+
+
+# ---- Tests for `sharded_flash_attention` ----
+
+
+@pytest.mark.parametrize(
+    ("shard_batch", "batch_axis"),
+    ((True, "data"), (False, None)),
+)
+def test_sharded_flash_attention_batch_sharding(
+    monkeypatch, mesh, shard_batch, batch_axis
+):
+    mapped = MagicMock()
+    shard_map = MagicMock(return_value=mapped)
+    monkeypatch.setattr(jax, "shard_map", shard_map)
+    monkeypatch.setattr(jax, "jit", lambda fn: fn)
+
+    result = sharded_flash_attention(mesh, shard_batch=shard_batch)
+
+    assert result is mapped
+    call = shard_map.call_args
+    assert call.kwargs["in_specs"][:3] == (
+        jax.sharding.PartitionSpec(batch_axis, "model", None, None),
+    ) * 3
+    assert call.kwargs["out_specs"] == jax.sharding.PartitionSpec(
+        batch_axis, "model", None, None
+    )
 
 
 # ---- Tests for `sharded_ragged_paged_attention` ----

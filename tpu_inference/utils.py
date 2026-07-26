@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import functools
+import os
 import time
 from collections import defaultdict
 from collections.abc import Sequence
@@ -125,6 +126,17 @@ def hbm_usage_bytes(devices: Any) -> List[Tuple[int, int]]:
     usage = []
     if vllm_envs.VLLM_TPU_USING_PATHWAYS:
         return pathways_hbm_usage_gb(devices)
+
+    if os.environ.get("QWEN3VL_VLLM_GLOBAL_MESH", "").lower() in (
+            "1", "true", "yes", "on"):
+        # MemoryStats is defined only for this controller's addressable
+        # devices. The global vLLM mesh deliberately includes every device in
+        # the pod, so resource accounting must use its local slice.
+        local_process = jax.process_index()
+        devices = [
+            device for device in devices
+            if device.process_index == local_process
+        ]
 
     multihost_backend = envs.TPU_MULTIHOST_BACKEND
     if multihost_backend == "ray":

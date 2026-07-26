@@ -633,6 +633,11 @@ class Qwen3VLVisionAttention(nnx.Module):
             causal=False,
             sm_scale=1.0 / math.sqrt(self.head_dim),
             vmem_limit_bytes=128 * 1024 * 1024,
+            # vLLM encodes multimodal items one at a time.  On a global
+            # data-parallel mesh that batch is therefore B=1 and cannot be
+            # partitioned over the DP axis.  Replicate the per-item vision
+            # work over DP while continuing to shard heads over model/TP.
+            shard_batch=False,
         )
 
     def __call__(
