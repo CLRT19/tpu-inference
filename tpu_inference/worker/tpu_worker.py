@@ -9,6 +9,7 @@ from typing import Callable, Dict, Optional, Tuple
 import jax
 import jaxlib
 import jaxtyping
+from jax._src import distributed as jax_distributed
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed.kv_transfer import (ensure_kv_transfer_initialized,
                                           has_kv_transfer_group)
@@ -33,6 +34,45 @@ from tpu_inference.models.jax.jax_intermediate_tensor import \
 from tpu_inference.runner.tpu_runner import TPUModelRunner
 
 logger = init_logger(__name__)
+
+
+def _uses_global_vllm_mesh() -> bool:
+    return os.environ.get("QWEN3VL_VLLM_GLOBAL_MESH", "").lower() in (
+        "1", "true", "yes", "on")
+
+
+def _wait_at_global_dispatch_barrier(step: int) -> None:
+    """Keep multi-controller global-mesh TPU launches in the same order."""
+    if not _uses_global_vllm_mesh() or jax.process_count() == 1:
+        return
+
+    # Host arrival alone is insufficient: a fast controller can still have
+    # asynchronous TPU work queued from initialization or the prior sampling
+    # step. Drain it before allowing the next global executable to launch.
+    jax.effects_barrier()
+
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError(
+            "Global-mesh vLLM dispatch has no JAX coordination client.")
+    run_id = os.environ.get("QWEN3VL_RUN_ID") or os.environ.get("RUN_NAME")
+    if not run_id:
+        raise RuntimeError(
+            "QWEN3VL_RUN_ID or RUN_NAME is required for global-mesh vLLM "
+            "dispatch barriers.")
+    barrier_name = f"{run_id}_vllm_dispatch_{step}"
+    timeout_ms = int(
+        os.environ.get("QWEN3VL_VLLM_DISPATCH_BARRIER_TIMEOUT_MS",
+                       "1800000"))
+    if step < 3 or step % 100 == 0:
+        logger.info(
+            "Global vLLM dispatch barrier entering | step=%d | proc=%d/%d",
+            step, jax.process_index(), jax.process_count())
+    client.wait_at_barrier(barrier_name, timeout_ms)
+    if step < 3 or step % 100 == 0:
+        logger.info(
+            "Global vLLM dispatch barrier exited | step=%d | proc=%d/%d",
+            step, jax.process_index(), jax.process_count())
 
 
 @dataclass
@@ -380,6 +420,8 @@ class TPUWorker(WorkerBase):
         # violates the pure abstract contract of the base class. This is a
         # deliberate, temporary compromise for the same reasons outlined in
         # the `get_kv_cache_spec` method.
+
+        _wait_at_global_dispatch_barrier(self.step_counter)
 
         if self.parallel_config.pipeline_parallel_size == 1 or self.rank == 0:
             intermediate_tensors = None

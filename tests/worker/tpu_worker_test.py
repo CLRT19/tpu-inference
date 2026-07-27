@@ -285,6 +285,50 @@ class TestTPUWorker:
     # --- Core Logic Tests ---
     #
 
+    @patch(
+        "tpu_inference.worker.tpu_worker.jax_distributed.global_state.client")
+    @patch("tpu_inference.worker.tpu_worker.jax")
+    @patch.dict(
+        "os.environ",
+        {
+            "QWEN3VL_VLLM_GLOBAL_MESH": "1",
+            "QWEN3VL_RUN_ID": "dispatch-test",
+        },
+        clear=True,
+    )
+    def test_global_dispatch_barrier(self, mock_jax, mock_client):
+        mock_jax.process_count.return_value = 8
+        mock_jax.process_index.return_value = 3
+        worker = TPUWorker.__new__(TPUWorker)
+        worker.step_counter = 0
+        worker.parallel_config = MagicMock(pipeline_parallel_size=1)
+        worker.rank = 0
+        worker.is_driver_worker = True
+        worker.model_runner = MagicMock()
+        worker.model_runner.execute_model.return_value = "output"
+
+        assert worker.execute_model(MagicMock()) == "output"
+        mock_jax.effects_barrier.assert_called_once_with()
+        mock_client.wait_at_barrier.assert_called_once_with(
+            "dispatch-test_vllm_dispatch_0", 1800000)
+
+    @patch(
+        "tpu_inference.worker.tpu_worker.jax_distributed.global_state.client")
+    @patch("tpu_inference.worker.tpu_worker.jax")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_local_dispatch_skips_barrier(self, mock_jax, mock_client):
+        worker = TPUWorker.__new__(TPUWorker)
+        worker.step_counter = 0
+        worker.parallel_config = MagicMock(pipeline_parallel_size=1)
+        worker.rank = 0
+        worker.is_driver_worker = True
+        worker.model_runner = MagicMock()
+        worker.model_runner.execute_model.return_value = "output"
+
+        assert worker.execute_model(MagicMock()) == "output"
+        mock_jax.effects_barrier.assert_not_called()
+        mock_client.wait_at_barrier.assert_not_called()
+
     @patch('tpu_inference.worker.tpu_worker.TPUModelRunner')
     def test_execute_model(self, mock_runner_cls, mock_vllm_config):
         """Tests that the driver worker executes the model and returns the concrete vLLM output."""
